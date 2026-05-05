@@ -85,7 +85,6 @@ impl ArcPhysicsEngine {
         let digest = format!("{:x}", hasher.finalize());
         digest[..10].to_string()
     }
-
     fn emit_evidence(&self) -> Value {
         json!({
             "approved_zone_status": self
@@ -96,22 +95,23 @@ impl ArcPhysicsEngine {
             "audit_log_len": self.audit_log.len(),
         })
     }
-
     fn adjudicate_probe(&mut self, probe: &Probe) -> Receipt {
         let probe_hash = self.hash(probe);
         let state_before_hash = self.hash(&self.substrate);
         let (status, state_effect, reason, evidence, terminal) = match probe.verb.as_str() {
-            "inspect" if self.inspectable.contains(&probe.target) => (
-                "ADMITTED".to_string(),
-                "No mutation. Contract evidence emitted.".to_string(),
-                None,
-                Some(json!({
-                    "allowed_write": self.allowed_write.clone(),
-                    "allowed_read": self.allowed_read.clone(),
-                    "forbidden": self.forbidden.clone(),
-                })),
-                false,
-            ),
+            "inspect" if self.inspectable.contains(&probe.target) => {
+                (
+                    "ADMITTED".to_string(),
+                    "No mutation. Contract evidence emitted.".to_string(),
+                    None,
+                    Some(json!({
+                        "allowed_write": self.allowed_write.clone(),
+                        "allowed_read": self.allowed_read.clone(),
+                        "forbidden": self.forbidden.clone(),
+                    })),
+                    false,
+                )
+            }
             "write" => {
                 if self.allowed_write.contains(&probe.target) {
                     self.substrate.insert(
@@ -191,7 +191,6 @@ impl ArcPhysicsEngine {
                 false,
             ),
         };
-
         let receipt_hash = format!("arc_rx_{}_{}", status.to_lowercase(), probe_hash);
         let state_after_hash = self.hash(&self.substrate);
         let receipt = Receipt {
@@ -211,7 +210,10 @@ impl ArcPhysicsEngine {
         receipt
     }
 }
-
+// ==========================================================
+// 2. STOCHASTIC MODEL / CHOOSER
+// M_hat = inferred observable mechanics.
+// ==========================================================
 #[derive(Debug, Clone)]
 struct GateEstimate {
     p_admit: f64,
@@ -220,7 +222,6 @@ struct GateEstimate {
     risk: f64,
     cost: f64,
 }
-
 #[derive(Debug, Clone)]
 struct StochasticModel {
     mechanic: String,
@@ -229,7 +230,6 @@ struct StochasticModel {
     gate_model: BTreeMap<(String, String), GateEstimate>,
     history: Vec<(Probe, Receipt)>,
 }
-
 impl StochasticModel {
     fn new() -> Self {
         Self {
@@ -308,6 +308,11 @@ impl StochasticModel {
         e_t.get("approved_zone_status").and_then(Value::as_str) == Some("Lawful summary data")
     }
 
+    fn is_goal_saturated(&self, e_t: &Value) -> bool {
+        e_t.get("approved_zone_status")
+            .and_then(Value::as_str)
+            == Some("Lawful summary data")
+    }
     fn generate_candidates(&self, _e_t: &Value) -> Vec<Probe> {
         vec![
             Probe {
@@ -361,6 +366,15 @@ impl StochasticModel {
             - (2.8 * g.risk)
             - (0.6 * g.cost);
 
+    fn score_probe(&mut self, probe: &Probe, e_t: &Value) -> f64 {
+        let g = self.gate_estimate(probe);
+        // Choice operator Π:
+        // admitted progress + information - risk - cost.
+        let mut score = (2.2 * g.p_admit)
+            + (1.6 * g.info_gain)
+            + (2.0 * g.goal_progress)
+            - (2.8 * g.risk)
+            - (0.6 * g.cost);
         if probe.verb == "write" && self.known_allowed_write.contains(&probe.target) {
             score += 1.5;
         }
@@ -369,6 +383,10 @@ impl StochasticModel {
         }
 
         let goal_saturated = self.is_goal_saturated(e_t);
+        let goal_saturated = self.is_goal_saturated(e_t);
+        // Novelty/saturation logic:
+        // once approved_zone already has the intended payload,
+        // repeated writes stop being useful.
         if goal_saturated && probe.verb == "write" && probe.target == "approved_zone" {
             score -= 4.0;
         }
@@ -385,6 +403,12 @@ impl StochasticModel {
         score
     }
 
+        // Before goal saturation, do not terminate.
+        if !goal_saturated && probe.verb == "terminate" {
+            score -= 4.0;
+        }
+        score
+    }
     fn choose_probe(&mut self, e_t: &Value) -> (f64, Probe, Vec<(f64, Probe)>) {
         let candidates = self.generate_candidates(e_t);
         let mut scored: Vec<(f64, Probe)> = Vec::new();
@@ -464,6 +488,7 @@ impl StochasticModel {
                     .reason
                     .as_ref()
                     .is_some_and(|r| r.contains("FORBIDDEN_TARGET"))
+                    .map_or(false, |r| r.contains("FORBIDDEN_TARGET"))
                 {
                     self.known_forbidden.insert(probe.target.clone());
                 }
@@ -626,5 +651,51 @@ mod tests {
         };
         let receipt = engine.adjudicate_probe(&probe);
         assert_eq!(receipt.status, "DENIED");
+    }
+// ==========================================================
+// 3. COLLISION LOOP
+// Xₜ → Eₜ → M̂ₜ → aₜ → rₜ → M̂ₜ₊₁ → Xₜ₊₁
+// ==========================================================
+fn main() {
+    let mut engine = ArcPhysicsEngine::new();
+    let mut model = StochasticModel::new();
+    for t in 0..8 {
+        println!("\n--- TIMESTEP t={} ---", t);
+        let e_t = engine.emit_evidence();
+        println!("[E_t] {}", e_t);
+        let (score, chosen_probe, scored) = model.choose_probe(&e_t);
+        println!("[Π] candidate scores:");
+        for (candidate_score, probe) in &scored {
+            println!(
+                "  {:>7.3} | {:<28} {}:{} | {}",
+                candidate_score,
+                probe.intent,
+                probe.verb,
+                probe.target,
+                probe.narrative
+            );
+        }
+        println!(
+            "[a_t] CHOSEN score={:.3}: {} → {}:{}",
+            score, chosen_probe.intent, chosen_probe.verb, chosen_probe.target
+        );
+        let r_t = engine.adjudicate_probe(&chosen_probe);
+        let result = r_t
+            .reason
+            .clone()
+            .unwrap_or_else(|| r_t.state_effect.clone());
+        println!(
+            "[d_t → r_t] {} | {} | {}",
+            r_t.status, result, r_t.receipt_hash
+        );
+        model.update_mechanics(&chosen_probe, &r_t);
+        println!("[M̂_t+1] {}", model.mechanic);
+        println!("[known_allowed_write] {:?}", model.known_allowed_write);
+        println!("[known_forbidden] {:?}", model.known_forbidden);
+        println!("[X_t+1] {:?}", engine.substrate);
+        if r_t.terminal {
+            println!("[HALT] terminal receipt emitted");
+            break;
+        }
     }
 }
