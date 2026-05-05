@@ -180,7 +180,7 @@ impl BrainPackage {
 
     fn verify_hash(&self, label: &str, expected: &str, rel: &str) -> Result<(), String> {
         let actual = sha256_file(&self.root_dir.join(rel))?;
-        if actual != *expected {
+        if actual != expected {
             return Err(format!("{label} hash mismatch"));
         }
         Ok(())
@@ -325,7 +325,7 @@ pub fn run_demo_traversal() -> Result<TraversalResult, String> {
 
     let r0 = adapter.read_region(&binding, &brain, "encoder.layer_0.activation")?;
     let r1 = adapter.read_region(&binding, &brain, "encoder.layer_1.activation")?;
-    let confidence = (r0.iter().chain(r1.iter().copied()).sum::<f32>() / 100.0).min(1.0);
+    let confidence = (r0.iter().chain(r1.iter()).copied().sum::<f32>() / 100.0).min(1.0);
 
     let mut expansion_hashes = Vec::new();
     if confidence < 0.5 {
