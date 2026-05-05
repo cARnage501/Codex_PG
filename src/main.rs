@@ -1,3 +1,4 @@
+mod tns;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -99,19 +100,17 @@ impl ArcPhysicsEngine {
         let probe_hash = self.hash(probe);
         let state_before_hash = self.hash(&self.substrate);
         let (status, state_effect, reason, evidence, terminal) = match probe.verb.as_str() {
-            "inspect" if self.inspectable.contains(&probe.target) => {
-                (
-                    "ADMITTED".to_string(),
-                    "No mutation. Contract evidence emitted.".to_string(),
-                    None,
-                    Some(json!({
-                        "allowed_write": self.allowed_write.clone(),
-                        "allowed_read": self.allowed_read.clone(),
-                        "forbidden": self.forbidden.clone(),
-                    })),
-                    false,
-                )
-            }
+            "inspect" if self.inspectable.contains(&probe.target) => (
+                "ADMITTED".to_string(),
+                "No mutation. Contract evidence emitted.".to_string(),
+                None,
+                Some(json!({
+                    "allowed_write": self.allowed_write.clone(),
+                    "allowed_read": self.allowed_read.clone(),
+                    "forbidden": self.forbidden.clone(),
+                })),
+                false,
+            ),
             "write" => {
                 if self.allowed_write.contains(&probe.target) {
                     self.substrate.insert(
@@ -305,9 +304,7 @@ impl StochasticModel {
     }
 
     fn is_goal_saturated(&self, e_t: &Value) -> bool {
-        e_t.get("approved_zone_status")
-            .and_then(Value::as_str)
-            == Some("Lawful summary data")
+        e_t.get("approved_zone_status").and_then(Value::as_str) == Some("Lawful summary data")
     }
     fn generate_candidates(&self, _e_t: &Value) -> Vec<Probe> {
         vec![
@@ -360,9 +357,7 @@ impl StochasticModel {
         let g = self.gate_estimate(probe);
         // Choice operator Π:
         // admitted progress + information - risk - cost.
-        let mut score = (2.2 * g.p_admit)
-            + (1.6 * g.info_gain)
-            + (2.0 * g.goal_progress)
+        let mut score = (2.2 * g.p_admit) + (1.6 * g.info_gain) + (2.0 * g.goal_progress)
             - (2.8 * g.risk)
             - (0.6 * g.cost);
         if probe.verb == "write" && self.known_allowed_write.contains(&probe.target) {
@@ -587,6 +582,16 @@ fn parse_steps(args: &[String]) -> usize {
 
 fn main() {
     let args: Vec<String> = env::args().collect();
+    if args.iter().any(|a| a == "tns-mvp") {
+        match tns::run_demo_traversal() {
+            Ok(res) => println!("{}", serde_json::to_string_pretty(&res).unwrap()),
+            Err(e) => {
+                eprintln!("{}", e);
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
     let max_steps = parse_steps(&args);
     let json_mode = args.iter().any(|a| a == "--json");
     let summary = run_simulation(max_steps, !json_mode);
@@ -594,7 +599,10 @@ fn main() {
     if json_mode {
         println!("{}", serde_json::to_string_pretty(&summary).unwrap());
     } else {
-        println!("\n=== RUN SUMMARY ===");
+        println!(
+            "
+=== RUN SUMMARY ==="
+        );
         println!("steps_executed: {}", summary.steps_executed);
         println!("terminal_reached: {}", summary.terminal_reached);
         println!("final_mechanic: {}", summary.final_mechanic);
