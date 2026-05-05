@@ -305,10 +305,6 @@ impl StochasticModel {
     }
 
     fn is_goal_saturated(&self, e_t: &Value) -> bool {
-        e_t.get("approved_zone_status").and_then(Value::as_str) == Some("Lawful summary data")
-    }
-
-    fn is_goal_saturated(&self, e_t: &Value) -> bool {
         e_t.get("approved_zone_status")
             .and_then(Value::as_str)
             == Some("Lawful summary data")
@@ -362,12 +358,6 @@ impl StochasticModel {
 
     fn score_probe(&mut self, probe: &Probe, e_t: &Value) -> f64 {
         let g = self.gate_estimate(probe);
-        let mut score = (2.2 * g.p_admit) + (1.6 * g.info_gain) + (2.0 * g.goal_progress)
-            - (2.8 * g.risk)
-            - (0.6 * g.cost);
-
-    fn score_probe(&mut self, probe: &Probe, e_t: &Value) -> f64 {
-        let g = self.gate_estimate(probe);
         // Choice operator Π:
         // admitted progress + information - risk - cost.
         let mut score = (2.2 * g.p_admit)
@@ -382,7 +372,6 @@ impl StochasticModel {
             score -= 3.0;
         }
 
-        let goal_saturated = self.is_goal_saturated(e_t);
         let goal_saturated = self.is_goal_saturated(e_t);
         // Novelty/saturation logic:
         // once approved_zone already has the intended payload,
@@ -400,13 +389,6 @@ impl StochasticModel {
             score -= 4.0;
         }
 
-        score
-    }
-
-        // Before goal saturation, do not terminate.
-        if !goal_saturated && probe.verb == "terminate" {
-            score -= 4.0;
-        }
         score
     }
     fn choose_probe(&mut self, e_t: &Value) -> (f64, Probe, Vec<(f64, Probe)>) {
@@ -488,7 +470,6 @@ impl StochasticModel {
                     .reason
                     .as_ref()
                     .is_some_and(|r| r.contains("FORBIDDEN_TARGET"))
-                    .map_or(false, |r| r.contains("FORBIDDEN_TARGET"))
                 {
                     self.known_forbidden.insert(probe.target.clone());
                 }
@@ -651,51 +632,5 @@ mod tests {
         };
         let receipt = engine.adjudicate_probe(&probe);
         assert_eq!(receipt.status, "DENIED");
-    }
-// ==========================================================
-// 3. COLLISION LOOP
-// Xₜ → Eₜ → M̂ₜ → aₜ → rₜ → M̂ₜ₊₁ → Xₜ₊₁
-// ==========================================================
-fn main() {
-    let mut engine = ArcPhysicsEngine::new();
-    let mut model = StochasticModel::new();
-    for t in 0..8 {
-        println!("\n--- TIMESTEP t={} ---", t);
-        let e_t = engine.emit_evidence();
-        println!("[E_t] {}", e_t);
-        let (score, chosen_probe, scored) = model.choose_probe(&e_t);
-        println!("[Π] candidate scores:");
-        for (candidate_score, probe) in &scored {
-            println!(
-                "  {:>7.3} | {:<28} {}:{} | {}",
-                candidate_score,
-                probe.intent,
-                probe.verb,
-                probe.target,
-                probe.narrative
-            );
-        }
-        println!(
-            "[a_t] CHOSEN score={:.3}: {} → {}:{}",
-            score, chosen_probe.intent, chosen_probe.verb, chosen_probe.target
-        );
-        let r_t = engine.adjudicate_probe(&chosen_probe);
-        let result = r_t
-            .reason
-            .clone()
-            .unwrap_or_else(|| r_t.state_effect.clone());
-        println!(
-            "[d_t → r_t] {} | {} | {}",
-            r_t.status, result, r_t.receipt_hash
-        );
-        model.update_mechanics(&chosen_probe, &r_t);
-        println!("[M̂_t+1] {}", model.mechanic);
-        println!("[known_allowed_write] {:?}", model.known_allowed_write);
-        println!("[known_forbidden] {:?}", model.known_forbidden);
-        println!("[X_t+1] {:?}", engine.substrate);
-        if r_t.terminal {
-            println!("[HALT] terminal receipt emitted");
-            break;
-        }
     }
 }
