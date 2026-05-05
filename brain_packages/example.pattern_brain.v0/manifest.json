@@ -1,0 +1,25 @@
+{
+  "schema": "brain_manifest_v0",
+  "brain_id": "example.pattern_brain.v0",
+  "version": "0.1.0",
+  "substrate_file": "substrate.json",
+  "substrate_hash": "sha256:7b22c5e2a5d3ead4c5324390d74e8eaefe02908efb5998df25af8cf9003f24be",
+  "coordinate_law": "coordinate_law.json",
+  "coordinate_law_hash": "sha256:ba3547a79fd108c4692c5e2aa6600b966235208e8349a891b9a17f3ea23b06c7",
+  "region_map": "region_map.json",
+  "region_map_hash": "sha256:3be8b19181aa141046bc24a5d30643f44abcc51a42802ba504ffeeebd35d5f7e",
+  "read_modes": "read_modes.json",
+  "read_modes_hash": "sha256:f6d4f60f250cc8aa605e2a2d39991fdd94251d582e63c0fcfad3da834a4a9513",
+  "adapter_abi": "adapter_abi.json",
+  "adapter_abi_hash": "sha256:d0f0eb5d54075ee95d7d522f66f2d5f6c809c4fa5e31257a08e2c2f8c6ac5aac",
+  "mutation_default": "forbidden",
+  "supported_read_modes": [
+    "readonly_activation_projection_v0"
+  ],
+  "supported_adapter_abis": [
+    "torch_readonly_projection_adapter_v0"
+  ],
+  "probe_receipts": [
+    "probes/probe_001.json"
+  ]
+}
