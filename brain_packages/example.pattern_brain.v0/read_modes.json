@@ -1,0 +1,1 @@
+[{"schema":"read_mode_v0","read_mode_id":"readonly_activation_projection_v0","allowed_regions":["encoder.layer_0.activation","encoder.layer_1.activation","output.logits"],"write_back_allowed":false,"gradient_flow_allowed":false,"mutation_allowed":false}]
