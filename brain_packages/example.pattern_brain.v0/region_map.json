@@ -1,0 +1,1 @@
+{"schema":"region_map_v0","brain_id":"example.pattern_brain.v0","regions":[{"region_id":"encoder.layer_0.activation","readable":true,"writable":false},{"region_id":"encoder.layer_1.activation","readable":true,"writable":false},{"region_id":"output.logits","readable":true,"writable":false}]}
