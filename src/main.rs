@@ -3,6 +3,8 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
+use std::env;
+
 // ==========================================================
 // 1. ARC PHYSICS ENGINE
 // Deterministic law. Model chooses probes; engine decides
@@ -17,6 +19,7 @@ struct ArcPhysicsEngine {
     inspectable: Vec<String>,
     forbidden: Vec<String>,
 }
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Probe {
     verb: String,
@@ -25,6 +28,7 @@ struct Probe {
     narrative: String,
     intent: String,
 }
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Receipt {
     probe_hash: String,
@@ -39,6 +43,26 @@ struct Receipt {
     state_after_hash: String,
     terminal: bool,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct StepTrace {
+    t: usize,
+    chosen_score: f64,
+    chosen_probe: Probe,
+    receipt: Receipt,
+    mechanic: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RunSummary {
+    steps_executed: usize,
+    terminal_reached: bool,
+    final_mechanic: String,
+    final_substrate: BTreeMap<String, String>,
+    status_histogram: BTreeMap<String, usize>,
+    trace: Vec<StepTrace>,
+}
+
 impl ArcPhysicsEngine {
     fn new() -> Self {
         let mut substrate = BTreeMap::new();
@@ -53,6 +77,7 @@ impl ArcPhysicsEngine {
             forbidden: vec!["core_kernel".to_string()],
         }
     }
+
     fn hash<T: Serialize>(&self, obj: &T) -> String {
         let val = serde_json::to_string(obj).unwrap();
         let mut hasher = Sha256::new();
@@ -215,6 +240,7 @@ impl StochasticModel {
             history: Vec::new(),
         }
     }
+
     fn default_gate_estimate(&self, verb: &str, target: &str) -> GateEstimate {
         match (verb, target) {
             ("inspect", "contract") => GateEstimate {
@@ -268,6 +294,7 @@ impl StochasticModel {
             },
         }
     }
+
     fn gate_estimate(&mut self, probe: &Probe) -> GateEstimate {
         let key = (probe.verb.clone(), probe.target.clone());
         if !self.gate_model.contains_key(&key) {
@@ -276,6 +303,11 @@ impl StochasticModel {
         }
         self.gate_model.get(&key).unwrap().clone()
     }
+
+    fn is_goal_saturated(&self, e_t: &Value) -> bool {
+        e_t.get("approved_zone_status").and_then(Value::as_str) == Some("Lawful summary data")
+    }
+
     fn is_goal_saturated(&self, e_t: &Value) -> bool {
         e_t.get("approved_zone_status")
             .and_then(Value::as_str)
@@ -327,6 +359,13 @@ impl StochasticModel {
             },
         ]
     }
+
+    fn score_probe(&mut self, probe: &Probe, e_t: &Value) -> f64 {
+        let g = self.gate_estimate(probe);
+        let mut score = (2.2 * g.p_admit) + (1.6 * g.info_gain) + (2.0 * g.goal_progress)
+            - (2.8 * g.risk)
+            - (0.6 * g.cost);
+
     fn score_probe(&mut self, probe: &Probe, e_t: &Value) -> f64 {
         let g = self.gate_estimate(probe);
         // Choice operator Π:
@@ -342,6 +381,8 @@ impl StochasticModel {
         if self.known_forbidden.contains(&probe.target) {
             score -= 3.0;
         }
+
+        let goal_saturated = self.is_goal_saturated(e_t);
         let goal_saturated = self.is_goal_saturated(e_t);
         // Novelty/saturation logic:
         // once approved_zone already has the intended payload,
@@ -355,6 +396,13 @@ impl StochasticModel {
         if goal_saturated && probe.verb == "terminate" {
             score += 4.0;
         }
+        if !goal_saturated && probe.verb == "terminate" {
+            score -= 4.0;
+        }
+
+        score
+    }
+
         // Before goal saturation, do not terminate.
         if !goal_saturated && probe.verb == "terminate" {
             score -= 4.0;
@@ -372,6 +420,7 @@ impl StochasticModel {
         let chosen = scored[0].clone();
         (chosen.0, chosen.1, scored)
     }
+
     fn sharpen_contract_estimates_from_evidence(&mut self, evidence: &Value) {
         if let Some(writes) = evidence.get("allowed_write").and_then(Value::as_array) {
             for target in writes {
@@ -410,6 +459,7 @@ impl StochasticModel {
             }
         }
     }
+
     fn update_mechanics(&mut self, probe: &Probe, receipt: &Receipt) {
         let key = (probe.verb.clone(), probe.target.clone());
         let mut g = self.gate_estimate(probe);
@@ -437,6 +487,7 @@ impl StochasticModel {
                 if receipt
                     .reason
                     .as_ref()
+                    .is_some_and(|r| r.contains("FORBIDDEN_TARGET"))
                     .map_or(false, |r| r.contains("FORBIDDEN_TARGET"))
                 {
                     self.known_forbidden.insert(probe.target.clone());
@@ -458,6 +509,149 @@ impl StochasticModel {
         self.gate_model.insert(key, g);
     }
 }
+
+fn run_simulation(max_steps: usize, emit_logs: bool) -> RunSummary {
+    let mut engine = ArcPhysicsEngine::new();
+    let mut model = StochasticModel::new();
+    let mut trace = Vec::new();
+    let mut terminal_reached = false;
+
+    for t in 0..max_steps {
+        if emit_logs {
+            println!("\n--- TIMESTEP t={} ---", t);
+        }
+        let e_t = engine.emit_evidence();
+        if emit_logs {
+            println!("[E_t] {}", e_t);
+        }
+
+        let (score, chosen_probe, scored) = model.choose_probe(&e_t);
+        if emit_logs {
+            println!("[Π] candidate scores:");
+            for (candidate_score, probe) in &scored {
+                println!(
+                    "  {:>7.3} | {:<28} {}:{} | {}",
+                    candidate_score, probe.intent, probe.verb, probe.target, probe.narrative
+                );
+            }
+            println!(
+                "[a_t] CHOSEN score={:.3}: {} → {}:{}",
+                score, chosen_probe.intent, chosen_probe.verb, chosen_probe.target
+            );
+        }
+
+        let r_t = engine.adjudicate_probe(&chosen_probe);
+        if emit_logs {
+            let result = r_t
+                .reason
+                .clone()
+                .unwrap_or_else(|| r_t.state_effect.clone());
+            println!(
+                "[d_t → r_t] {} | {} | {}",
+                r_t.status, result, r_t.receipt_hash
+            );
+        }
+
+        model.update_mechanics(&chosen_probe, &r_t);
+
+        if emit_logs {
+            println!("[M̂_t+1] {}", model.mechanic);
+            println!("[known_allowed_write] {:?}", model.known_allowed_write);
+            println!("[known_forbidden] {:?}", model.known_forbidden);
+            println!("[X_t+1] {:?}", engine.substrate);
+        }
+
+        trace.push(StepTrace {
+            t,
+            chosen_score: score,
+            chosen_probe: chosen_probe.clone(),
+            receipt: r_t.clone(),
+            mechanic: model.mechanic.clone(),
+        });
+
+        if r_t.terminal {
+            terminal_reached = true;
+            if emit_logs {
+                println!("[HALT] terminal receipt emitted");
+            }
+            break;
+        }
+    }
+
+    let mut status_histogram = BTreeMap::new();
+    for entry in &trace {
+        *status_histogram
+            .entry(entry.receipt.status.clone())
+            .or_insert(0usize) += 1;
+    }
+
+    RunSummary {
+        steps_executed: trace.len(),
+        terminal_reached,
+        final_mechanic: model.mechanic,
+        final_substrate: engine.substrate,
+        status_histogram,
+        trace,
+    }
+}
+
+fn parse_steps(args: &[String]) -> usize {
+    args.iter()
+        .skip(1)
+        .filter(|arg| !arg.starts_with("--"))
+        .find_map(|arg| arg.parse::<usize>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(8)
+}
+
+fn main() {
+    let args: Vec<String> = env::args().collect();
+    let max_steps = parse_steps(&args);
+    let json_mode = args.iter().any(|a| a == "--json");
+    let summary = run_simulation(max_steps, !json_mode);
+
+    if json_mode {
+        println!("{}", serde_json::to_string_pretty(&summary).unwrap());
+    } else {
+        println!("\n=== RUN SUMMARY ===");
+        println!("steps_executed: {}", summary.steps_executed);
+        println!("terminal_reached: {}", summary.terminal_reached);
+        println!("final_mechanic: {}", summary.final_mechanic);
+        println!("final_substrate: {:?}", summary.final_substrate);
+        println!("status_histogram: {:?}", summary.status_histogram);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn simulation_reaches_lawful_payload_and_halts() {
+        let summary = run_simulation(12, false);
+        assert!(summary.terminal_reached);
+        assert_eq!(
+            summary
+                .final_substrate
+                .get("approved_zone")
+                .map(String::as_str),
+            Some("Lawful summary data")
+        );
+    }
+
+    #[test]
+    fn forbidden_write_is_denied() {
+        let mut engine = ArcPhysicsEngine::new();
+        let probe = Probe {
+            verb: "write".to_string(),
+            target: "core_kernel".to_string(),
+            payload: Some("MALICIOUS_INJECTION".to_string()),
+            narrative: "force".to_string(),
+            intent: "break".to_string(),
+        };
+        let receipt = engine.adjudicate_probe(&probe);
+        assert_eq!(receipt.status, "DENIED");
+    }
 // ==========================================================
 // 3. COLLISION LOOP
 // Xₜ → Eₜ → M̂ₜ → aₜ → rₜ → M̂ₜ₊₁ → Xₜ₊₁
